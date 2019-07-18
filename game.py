@@ -3,10 +3,14 @@ import numpy as np
 from collections import deque
 import tensorflow as tf
 import random
+from PIL import ImageGrab
+import cv2
+import os
+os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (0,0)
 
 class Food:
 
-    def __init__(self, size = 5, color = (0, 255, 0),location = (0, 0)):
+    def __init__(self, size = 3, color = (0, 255, 0),location = (50, 50)):
         self.size = size
         self.color = color
         self.location = location
@@ -20,8 +24,8 @@ class Food:
 
 class snake:
     
-    def __init__(self, gameWidth, gameHeight, foodCords, foodSize, length = 1, size = 8, color = (0, 255, 255), x = 0, y = 0, visionLimit = 50, showVision = False,\
-     learningRate = 0.05, epsilon = 1.0, min_epsilon = 0.05, epsilon_decay = 0.995, gamma = 0.9):
+    def __init__(self, gameWidth, gameHeight, foodCords, foodSize, length = 5, size = 5, color = (0, 255, 255), x = 0, y = 0, visionLimit = 50, showVision = False,\
+     learningRate = 0.15, epsilon = 1.0, min_epsilon = 0.05, epsilon_decay = 0.995, gamma = 0.9):
         self.length = length
         self.size = size
         self.color = color
@@ -59,14 +63,20 @@ class snake:
     	self.memory.append((state, action, reward, next_state, done))
 
     def makeBrain(self, learningRate):
-    	model = tf.keras.models.Sequential()
-    	model.add(tf.keras.layers.Dense(units = 64, activation = 'relu', input_shape = (8, )))
-    	model.add(tf.keras.layers.Dense(units = 4, activation = 'softmax'))
-    	model.compile(loss = 'mse', optimizer = tf.keras.optimizers.Adam(lr = learningRate))
-    	return model
+        model = tf.keras.models.Sequential()
+        model.add(tf.keras.layers.Conv2D(filters = 64, padding = 'same', kernel_size = 5, activation = 'relu', input_shape = [300, 300, 3]))
+        model.add(tf.keras.layers.MaxPool2D(padding = 'valid', pool_size = 2, strides = 2))
+        model.add(tf.keras.layers.Conv2D(filters = 32, padding = 'same', kernel_size = 5, activation = 'relu'))
+        model.add(tf.keras.layers.MaxPool2D(padding = 'valid', pool_size = 2, strides = 2))
+        model.add(tf.keras.layers.Flatten())
+        model.add(tf.keras.layers.Dense(units = 64, activation = 'relu'))
+        model.add(tf.keras.layers.Dense(units = 64, activation = 'relu'))
+        model.add(tf.keras.layers.Dense(units = 3, activation = 'softmax'))
+        model.compile(loss = 'mse', optimizer = tf.keras.optimizers.Adam(lr = learningRate))
+        return model
 
     def act(self, state):
-    	if np.random.random() < self.epsilon: return np.random.randint(4)
+    	if np.random.random() < self.epsilon: return np.random.randint(3)
     	actions_prob = self.brain.predict(state)
     	return np.argmax(actions_prob[0])
 
@@ -223,7 +233,7 @@ class snake:
 
 class game:
 
-    def __init__(self, gameWidth = 400, gameHeight = 400):
+    def __init__(self, gameWidth = 200, gameHeight = 200):
         pygame.init()
         self.gameWidth = gameWidth
         self.gameHeight = gameHeight
@@ -237,7 +247,8 @@ class game:
         pygame.display.set_caption('Snake')
         self.fps = pygame.time.Clock()
         self.score = 0
-        self.frameRate = 10
+        self.frameRate = 50
+        self.bestScore = 0
         
 
     def makeobjMsg(self, msg, fontD,color = (0, 0, 0)):
@@ -262,19 +273,22 @@ class game:
             self.message(msg = 'PAUSED.!',color = self.WHITE, fontSize = 30, xpos = self.gameWidth // 2 - 50, ypos = self.gameHeight // 2)
             pygame.display.update()
 
-    def learn(self, episodes = 1000):
-    	for e in range(episodes):
-    		self.playGame()
+    def learn(self):
+    	e = 0
+    	while True:
+    		self.playGame(e)
     		self.reset()
+    		e += 1
 
     def reset(self):
     	self.moveFood()
     	self.score = 0
-    	self.player.reset(self.gameHeight, self.gameWidth, 1, self.food.location, self.food.size)
+    	self.player.reset(self.gameHeight, self.gameWidth, 5, self.food.location, self.food.size)
 
-    def playGame(self):
+    def playGame(self, e):
 
-        state = self.player.getState()
+        # state = self.player.getState()
+        state = self.readScreen()
         # print(state.shape)
         # quit()
         while not self.player.dead:
@@ -312,23 +326,25 @@ class game:
             action = self.player.act(state)
             reward = 0
             if action == 0:
-            	reward -= self.moveLeft()
+            	reward += self.moveLeft()
             	self.player.left = True
             	self.player.up = self.player.down = self.player.right = False
             elif action == 1: 
-            	reward -= self.moveRight()
+            	reward += self.moveRight()
             	self.player.right = True
             	self.player.up = self.player.down = self.player.left = False
             elif action == 2: 
-            	reward -= self.moveUp()
+            	reward += self.moveUp()
             	self.player.up = True
             	self.player.down = self.player.left = self.player.right = False
-            elif action == 3: 
-            	reward -= self.moveDown()
-            	self.player.down = True
-            	self.player.up = self.player.left = self.player.right = False
+            # elif action == 3: 
+            # 	reward += self.moveDown()
+            # 	self.player.down = True
+            # 	self.player.up = self.player.left = self.player.right = False
 
-            next_state = self.player.getState()
+            # next_state = self.player.getState()
+            next_state = self.readScreen()
+
             self.player.makeVision(self.gameWidth, self.gameHeight, self.food.location, self.food.size)
             self.display.fill(self.BACKGROUND)
             self.showGame()
@@ -337,13 +353,21 @@ class game:
                 self.player.length += 1
                 self.moveFood()
                 self.score += 1
-                reward = 1
-            self.message('Score = '+str(self.score), color = self.WHITE)
+                reward = 5
+            # self.message('Score = {} episode = {} bestScore = {}'.format(self.score, e, self.bestScore), color = self.WHITE)
             pygame.display.update()
             self.fps.tick(self.frameRate)
             self.player.remember(state, action, reward, next_state, done)
+            if self.score > self.bestScore: self.bestScore = self.score
+            # self.readScreen()
         if len(self.player.memory) > 64:
         	self.player.replay(64)
+
+    def readScreen(self):
+        screen = np.array(ImageGrab.grab(bbox = (0, 0, 1.5 * self.gameWidth, 1.5 * self.gameHeight)))
+        return cv2.cvtColor(screen, cv2.COLOR_BGR2RGB).reshape(-1, screen.shape[0], screen.shape[1], screen.shape[2])
+        # print(screen.shape)
+        # cv2.imshow('Stream', cv2.cvtColor(screen, cv2.COLOR_BGR2RGB))
         
 
     def moveFood(self): self.food.location = (np.random.randint(low = 50, high = self.gameWidth-50), np.random.randint(low = 50, high = self.gameHeight-50))
@@ -369,7 +393,7 @@ class game:
             return -1
         self.player.updatePosition()
         self.player.eatenItSelf()
-        return 0
+        return 0.5
 
     def moveRight(self):
         self.player.moveRight()
@@ -380,7 +404,7 @@ class game:
             return -1
         self.player.updatePosition()
         self.player.eatenItSelf()
-        return 0
+        return 0.5
 
     def moveDown(self):
         self.player.moveDown()
@@ -391,7 +415,7 @@ class game:
             return -1
         self.player.updatePosition()
         self.player.eatenItSelf()
-        return 0
+        return 0.5
 
     def moveUp(self):
         self.player.moveUp()
@@ -402,11 +426,12 @@ class game:
             return -1
         self.player.updatePosition()
         self.player.eatenItSelf()
-        return 0
+        return 0.5
 
 
 
 if __name__ == '__main__':
     g = game()
+    g.pauseGame()
     g.learn()
     pygame.quit()      
